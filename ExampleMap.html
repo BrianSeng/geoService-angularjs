@@ -1,0 +1,216 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title></title>
+	<meta charset="utf-8" />
+    <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.6.4/angular.min.js"></script>
+</head>
+<body ng-app="MapApp">
+    <div ng-controller="mapController as mapVm"
+         id="exampleMap">
+    </div>
+
+    <script src="../js-marker-clusterer/src/markerclusterer.js"></script>
+    <script src="geoService.js"></script>
+    <script type="text/javascript">
+        //=============================================================
+        // THIS IS MERELY EXAMPLE CODE, WILL NOT WORK WITHOOUT A MEANS 
+        // OF FEEDING IN APPROPRIATE LAT/LONG DATA TO POPULATE MARKERS
+        //=============================================================
+
+        (function ()
+        {
+            "use strict";
+
+            angular.module(APPNAME)
+                .controller("mapController", MapController);
+
+            MapController.$inject = [
+                "$scope"
+                , "$baseController"
+                , "geoService"
+                , "addressService"];
+
+            function MapController(
+                $scope
+                , $baseController
+                , geoService
+                , addressService)
+            {
+                var vm = this;
+
+                // Dependency Assignment
+                $baseController.merge(vm, $baseController);
+                vm.$scope = $scope;
+                vm.geoService = geoService;
+                vm.addressService = addressService;
+
+                // View Model
+                vm.map;
+                vm.mapOpts;
+                vm.markerOpts;
+                vm.heatMap;
+                vm.heatMapData = [];
+                vm.markerDict = {};
+                
+
+                //=====** THE FOLD **=====
+
+                vm.$onInit = _renderMap;
+
+                function _renderMap()
+                {
+                    //vm.addressService.read(_initMap, _onFail);
+
+                    var mapId = "exampleMap";
+                    var centerLatLng = {
+                        lat: 37.09024
+                        , long: -95.712891
+                    };
+                    vm.mapOpts = {
+                        zoom: 4 //should be 4 for this map, anything else is a test
+                        , scrollwheel: true
+                        , onIdle: vm.addressService.getByBounds
+                        , onBoundChanged: _onGetMarkersSuccess
+                        , onIsInBounds: vm.geoService.setMarkerVisibility
+                    };
+                    vm.map = vm.geoService.initMap(centerLatLng, vm.mapOpts, mapId);
+                    vm.geoService.onMapIdle(vm.map, vm.mapOpts)
+                }
+                //function on idle, also function on threshold change
+                //dictionary of markers using the object's id
+                function _onGetMarkersSuccess(data)
+                {
+                    var locArr = data.items;
+
+                    if (locArr)
+                    {
+                        var newLatLngs = _filterOutNewLatLngs(locArr);
+                    }
+                    //console.log(Object.keys(vm.markerDict).length);
+                    //console.log(locArr);
+                    //console.log(newLatLngs);
+
+                    vm.markerOpts = {
+                        infoWindow: true
+                        , zoomVisibility: true
+                        , zoomThreshold: 8
+                        , entityId: "id"
+                        , onClick: _onMarkerClicked
+                        , onThresholdChange: _onThresholdChange
+                        , getTitle: _getTitle
+                    };
+
+                    //MAKE THE DISTINCTION IF THEY'RE NEW OR NOT BEFORE TURNING THEM INTO MARKERS
+                    if (newLatLngs)
+                    {
+                        var markers = vm.geoService.getMarkersFromArray(newLatLngs, vm.markerOpts);
+                        var newMarkers;
+                    }
+
+                    if (markers && markers.length > 0)
+                    {
+                        //should return only new markers
+                        newMarkers = _addNewMarkersToDict(markers);
+                    }
+                    //SHOULD ONLY BE SENDING NEW MARKERS TO THE ADD TO MAP FUNCTION
+                    if (newMarkers && newMarkers.length > 0)
+                    {
+                        _addMarkersToMap(newMarkers);
+                    }
+                    vm.geoService.markersBoundsCheck(vm.map, Object.values(vm.markerDict), vm.mapOpts);
+                }
+
+                function _addMarkersToMap(newMarkers)
+                {
+                    vm.geoService.addMarkersToMap(vm.map, newMarkers, vm.markerOpts);
+
+                    //console.log(vm.markerDict);
+
+                    vm.geoService.showMarkerClusters(vm.map, newMarkers);
+
+                    //add to heat map, no need to create another one all over again **CHANGED**
+                    var updatedHeatMapData = vm.geoService.getNewHeatMapData(vm.heatMapData, newMarkers);
+                    if (updatedHeatMapData)
+                    {
+                        vm.heatMap = vm.geoService.getHeatMap(vm.map, updatedHeatMapData);
+                    }
+                }
+
+                function _filterOutNewLatLngs(locArr)
+                {
+                    var newLatLngs = [];
+
+                    if (!vm.markerDict)
+                    {
+                        newLatLngs = locArr;
+                    }
+                    else
+                    {
+                        newLatLngs = locArr.filter(_checkAgainstMarkerDict);
+                    }
+
+                    return newLatLngs;
+                }
+                function _checkAgainstMarkerDict(loc)
+                {
+                    if (typeof (vm.markerDict[loc.followerId]) === "undefined")
+                    {
+                        return loc;
+                    }
+                }
+
+                function _addNewMarkersToDict(markers)
+                {
+                    var newMarkers = [];
+                    for (var i = 0; i < markers.length; i++)
+                    {
+                        if (typeof (vm.markerDict[markers[i].model.id]) === "undefined")
+                        {
+                            vm.markerDict[markers[i].model.id] = markers[i];
+                            newMarkers.push(markers[i]);
+                        }
+                    }
+                    //console.log(Object.keys(vm.markerDict).length);
+                    return newMarkers;
+                }
+
+                function _onThresholdChange(overUnder)
+                {
+                    var isVisible = overUnder === -1 ? false : true;
+                    //iterate over markers and call setVisible
+                    for (var prop in vm.markerDict)
+                    {
+                        vm.geoService.setMarkerVisibility(vm.markerDict[prop], isVisible);
+                    }
+                }
+
+                function _onMarkerClicked(map)
+                {
+                    var marker = this;
+                    return vm.geoService.showInfo(marker, _getWinContent, vm.map);
+                }
+
+                function _getWinContent(data)
+                {
+                    var infoWin = '<div class="media" style="width: 180px;"><div class="media-left"><img src="[ADD_AN_IMG_URL]" /></div><div class="media-body">' + data.title + '</div></div>'
+
+                    return infoWin;
+                }
+
+                function _getTitle(marker, loc)
+                {
+                    marker.model.title = loc.line1 + ", " + loc.city;
+                }
+
+                function _onFail(jqXHR, status)
+                {
+                    console.log("Something went wrong.");
+                    console.log(status);
+                    console.log(jqXHR);
+                }
+            }
+        })();
+    </script>
+</body>
+</html>
